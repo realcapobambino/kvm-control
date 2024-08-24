@@ -1,80 +1,68 @@
 import socket
-import netifaces
+import threading
 import logging
 import platform
 
-if platform.system() == "Windows":
-    import winreg
-
 class NetworkManager:
     def __init__(self):
-        self.port = 5000  # Default port
-        self.broadcast_name = "default kvm"
-        self.interface = None
-        self.buffer_size = 1024
+        self.port = 5000
+        self.ip = self.get_local_ip()
+        self.connected = False
+        self.server_socket = None
+        self.client_socket = None
 
-    def get_interfaces(self):
-        interfaces = netifaces.interfaces()
-        if platform.system() == "Windows":
-            return [self._get_windows_friendly_name(iface) for iface in interfaces]
-        return interfaces
-
-    def _get_windows_friendly_name(self, iface):
+    def get_local_ip(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, f"SYSTEM\\CurrentControlSet\\Control\\Network\\{{4D36E972-E325-11CE-BFC1-08002BE10318}}\\{iface}\\Connection")
-            name, _ = winreg.QueryValueEx(key, "Name")
-            return name
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
         except:
-            return iface
-
-    def set_interface(self, interface):
-        self.interface = interface
-
-    def set_port(self, port):
-        self.port = int(port) if port else 5000
-
-    def set_broadcast_name(self, name):
-        self.broadcast_name = name
-
-    def discover_hosts(self):
-        broadcast_message = f"DISCOVER_KVM:{self.broadcast_name}"
-        hosts = []
-
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            sock.settimeout(2)
-            sock.sendto(broadcast_message.encode(), ('<broadcast>', self.port))
-
-            try:
-                while True:
-                    data, addr = sock.recvfrom(self.buffer_size)
-                    if data:
-                        host_info = data.decode()
-                        logging.info(f"Discovered host: {host_info} at {addr[0]}")
-                        hosts.append(f"{host_info} ({addr[0]})")
-            except socket.timeout:
-                logging.info("Host discovery completed.")
-
-        return hosts
+            ip = "127.0.0.1"
+        finally:
+            s.close()
+        return ip
 
     def start_host(self):
-        host_ip = self._get_host_ip()
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server_socket.bind((host_ip, self.port))
+        self.server_socket.bind((self.ip, self.port))
         self.server_socket.listen(1)
-        logging.info(f"Host server started on {host_ip}:{self.port}")
+        logging.info(f"Host started on {self.ip}:{self.port}")
+        threading.Thread(target=self._accept_connection, daemon=True).start()
 
-    def connect_to_host(self, host):
-        host_ip = host.split('(')[-1][:-1]
+    def _accept_connection(self):
+        while not self.connected:
+            try:
+                self.client_socket, addr = self.server_socket.accept()
+                self.connected = True
+                logging.info(f"Connected to client {addr}")
+            except:
+                pass
+
+    def connect_to_host(self, host_ip):
         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.client_socket.connect((host_ip, self.port))
-        logging.info(f"Connected to host {host_ip}:{self.port}")
+        try:
+            self.client_socket.connect((host_ip, self.port))
+            self.connected = True
+            logging.info(f"Connected to host {host_ip}:{self.port}")
+        except:
+            logging.error(f"Failed to connect to {host_ip}:{self.port}")
 
-    def _get_host_ip(self):
-        if self.interface:
-            return netifaces.ifaddresses(self.interface)[netifaces.AF_INET][0]['addr']
-        return socket.gethostbyname(socket.gethostname())
+    def disconnect(self):
+        if self.client_socket:
+            self.client_socket.close()
+        if self.server_socket:
+            self.server_socket.close()
+        self.connected = False
+        logging.info("Disconnected")
 
-    def p2p_connect(self):
-        # Implement P2P connection logic here
-        pass
+    def discover_hosts(self):
+        hosts = []
+        for i in range(1, 255):
+            ip = f"{self.ip.rsplit('.', 1)[0]}.{i}"
+            if ip != self.ip:
+                try:
+                    with socket.create_connection((ip, self.port), timeout=0.1):
+                        hosts.append(ip)
+                except:
+                    pass
+        return hosts
