@@ -24,6 +24,7 @@ class KVMControl:
 
         self.is_host = False
         self.active = False
+
         self.hosts = []
         self.selected_host = None
         self.port = random.randint(*PORT_RANGE)
@@ -68,43 +69,96 @@ class KVMControl:
         if selection:
             self.selected_host = self.hosts[selection[0]]
 
+
     def discover_hosts(self):
         self.hosts = []
         self.host_listbox.delete(0, tk.END)
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(DISCOVERY_TIMEOUT)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.settimeout(0.5)  # Short timeout for each attempt
 
-        try:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(('', MULTICAST_PORT))
-            mreq = struct.pack("4sl", socket.inet_aton(MULTICAST_GROUP), socket.INADDR_ANY)
-            sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        message = b'KVM_DISCOVER'
+
+        for _ in range(5):  # Try discovery multiple times
+            sock.sendto(message, ('<broadcast>', MULTICAST_PORT))
 
             start_time = time.time()
-            while time.time() - start_time < DISCOVERY_TIMEOUT:
+            while time.time() - start_time < 2:  # Listen for responses for 2 seconds
                 try:
                     data, addr = sock.recvfrom(BUFFER_SIZE)
                     if data.startswith(b'KVM_HOST'):
                         host_port = int(data.split(b':')[1])
-                        self.hosts.append((addr[0], host_port))
-                        self.host_listbox.insert(tk.END, f"{addr[0]}:{host_port}")
+                        host_info = (addr[0], host_port)
+                        if host_info not in self.hosts:
+                            self.hosts.append(host_info)
+                            self.host_listbox.insert(tk.END, f"{addr[0]}:{host_port}")
                 except socket.timeout:
                     pass
-        finally:
-            sock.close()
+
+        sock.close()
+
+        if not self.hosts:
+            self.status_label.config(text="No hosts found. Try again.")
+        else:
+            self.status_label.config(text=f"Found {len(self.hosts)} host(s)")
 
     def broadcast_presence(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.bind(('', 0))  # Bind to any available port
 
         message = f'KVM_HOST:{self.port}'.encode()
+
         while self.active:
-            sock.sendto(message, (MULTICAST_GROUP, MULTICAST_PORT))
-            time.sleep(1)
+            try:
+                # Listen for discovery messages
+                sock.settimeout(1)
+                data, addr = sock.recvfrom(BUFFER_SIZE)
+                if data == b'KVM_DISCOVER':
+                    sock.sendto(message, addr)
+            except socket.timeout:
+                pass  # No discovery message received, continue loop
 
         sock.close()
+
+    # def discover_hosts(self):
+    #     self.hosts = []
+    #     self.host_listbox.delete(0, tk.END)
+
+    #     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    #     sock.settimeout(DISCOVERY_TIMEOUT)
+
+    #     try:
+    #         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    #         sock.bind(('', MULTICAST_PORT))
+    #         mreq = struct.pack("4sl", socket.inet_aton(MULTICAST_GROUP), socket.INADDR_ANY)
+    #         sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+
+    #         start_time = time.time()
+    #         while time.time() - start_time < DISCOVERY_TIMEOUT:
+    #             try:
+    #                 data, addr = sock.recvfrom(BUFFER_SIZE)
+    #                 if data.startswith(b'KVM_HOST'):
+    #                     host_port = int(data.split(b':')[1])
+    #                     self.hosts.append((addr[0], host_port))
+    #                     self.host_listbox.insert(tk.END, f"{addr[0]}:{host_port}")
+    #             except socket.timeout:
+    #                 pass
+    #     finally:
+    #         sock.close()
+
+    # def broadcast_presence(self):
+    #     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    #     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    #     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+
+    #     message = f'KVM_HOST:{self.port}'.encode()
+    #     while self.active:
+    #         sock.sendto(message, (MULTICAST_GROUP, MULTICAST_PORT))
+    #         time.sleep(1)
+
+    #     sock.close()
 
     def generate_key(self):
         return hashlib.sha256(str(random.getrandbits(256)).encode()).digest()
