@@ -72,6 +72,8 @@ class KVMUI:
             if selected_host:
                 self.network_manager.connect_to_host(selected_host)
 
+        self.kvm_control.start_listening()
+
     def discover_hosts(self):
         hosts = self.network_manager.discover_hosts()
         self.host_listbox.delete(0, tk.END)
