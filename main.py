@@ -8,6 +8,9 @@ import struct
 import hashlib
 from pynput import mouse, keyboard
 
+#logging for discovery
+import logging
+
 # Configuration
 PORT_RANGE = (49152, 65535)  # Dynamic/private port range
 MULTICAST_GROUP = '224.0.0.251'
@@ -71,6 +74,10 @@ class KVMControl:
 
 
     def discover_hosts(self):
+
+        #logging
+        logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
         self.hosts = []
         self.host_listbox.delete(0, tk.END)
 
@@ -81,12 +88,20 @@ class KVMControl:
         message = b'KVM_DISCOVER'
 
         for _ in range(5):  # Try discovery multiple times
+
+            #logs
+            logging.debug(f"Sending discovery broadcast {i+1}/5")
+
             sock.sendto(message, ('<broadcast>', MULTICAST_PORT))
 
             start_time = time.time()
             while time.time() - start_time < 2:  # Listen for responses for 2 seconds
                 try:
                     data, addr = sock.recvfrom(BUFFER_SIZE)
+
+                    #logs
+                    logging.debug(f"Received data from {addr}: {data}")
+
                     if data.startswith(b'KVM_HOST'):
                         host_port = int(data.split(b':')[1])
                         host_info = (addr[0], host_port)
@@ -95,6 +110,8 @@ class KVMControl:
                             self.host_listbox.insert(tk.END, f"{addr[0]}:{host_port}")
                 except socket.timeout:
                     pass
+
+        logging.debug(f"Discovery complete. Found {len(self.hosts)} hosts")
 
         sock.close()
 
