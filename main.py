@@ -87,7 +87,7 @@ class KVMControl:
 
         message = b'KVM_DISCOVER'
 
-        for _ in range(5):  # Try discovery multiple times
+        for i in range(5):  # Try discovery multiple times
 
             #logs
             logging.debug(f"Sending discovery broadcast {i+1}/5")
